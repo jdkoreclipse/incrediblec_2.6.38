@@ -95,6 +95,9 @@ struct clkctl_acpu_speed {
 	int	 max_vdd;
 };
 
+#ifndef MAX
+#define MAX(A,B) (A>B?A:B)
+#endif
 
 struct clkctl_acpu_speed acpu_vdd_tbl[] = {
 
@@ -130,6 +133,41 @@ static int avs_debug = 0;
 module_param(avs_debug, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(avs_debug, "Toggle AVS debug printout");
 
+#ifdef CONFIG_MSM_CPU_AVS
+ssize_t acpuclk_get_vdd_levels_havs_str(char *buf)
+{
+	int i, len = 0;
+
+	if (buf) {
+		for (i = 0; acpu_vdd_tbl[i].acpu_khz; i++) {
+			len += sprintf(buf + len, "%8u: %4d %4d\n", acpu_vdd_tbl[i].acpu_khz, acpu_vdd_tbl[i].min_vdd, acpu_vdd_tbl[i].max_vdd);
+		}
+	}
+
+	return len;
+}
+
+void acpuclk_set_vdd_havs(unsigned acpu_khz, int min_vdd, int max_vdd)
+{
+	int i;
+	min_vdd = min_vdd / 25 * 25;
+	max_vdd = max_vdd / 25 * 25;
+	mutex_lock(&avs_lock);
+	for (i = 0; acpu_vdd_tbl[i].acpu_khz; i++) {
+		if (acpu_khz == 0) {
+			acpu_vdd_tbl[i].min_vdd = min(max((acpu_vdd_tbl[i].min_vdd + min_vdd), VOLTAGE_MIN), VOLTAGE_MAX);
+			acpu_vdd_tbl[i].max_vdd = min(max((acpu_vdd_tbl[i].max_vdd + max_vdd), VOLTAGE_MIN), VOLTAGE_MAX);
+		} else if (acpu_vdd_tbl[i].acpu_khz == acpu_khz) {
+			acpu_vdd_tbl[i].min_vdd = min(max(min_vdd, VOLTAGE_MIN), VOLTAGE_MAX);
+			acpu_vdd_tbl[i].max_vdd = min(max(max_vdd, VOLTAGE_MIN), VOLTAGE_MAX);
+		}
+	}
+	avs_reset_delays(AVSDSCR_INPUT);
+	avs_set_tscsr(TSCSR_INPUT);
+	mutex_unlock(&avs_lock);
+}
+#endif
+
 /*
  *  Update the AVS voltage vs frequency table, for current temperature
  *  Adjust based on the AVS delay circuit hardware status
@@ -148,7 +186,8 @@ static void avs_update_voltage_table(short *vdd_table)
 	cur_voltage = avs_state.vdd;
 
 	avscsr = avs_test_delays();
-	AVSDEBUG("avscsr=%x, avsdscr=%x\n", avscsr, avs_get_avsdscr());
+	AVSDEBUG("vdd_table=0x%X\n", (unsigned int)vdd_table);
+	AVSDEBUG("avscsr=%x, avsdscr=%x, cur_voltage=%d\n", avscsr, avs_get_avsdscr(), cur_voltage);
 
 	/*
 	 * Read the results for the various unit's AVS delay circuits
@@ -157,6 +196,7 @@ static void avs_update_voltage_table(short *vdd_table)
 	cpu = ((avscsr >> 23) & 2) + ((avscsr >> 16) & 1);
 	vu  = ((avscsr >> 28) & 2) + ((avscsr >> 21) & 1);
 	l2  = ((avscsr >> 29) & 2) + ((avscsr >> 22) & 1);
+	AVSDEBUG("cpu=%d, vu=%d, l2=%d\n", cpu, vu, l2);
 
 	if ((cpu == 3) || (vu == 3) || (l2 == 3)) {
 		printk(KERN_ERR "AVS: Dly Synth O/P error\n");
@@ -183,6 +223,7 @@ static void avs_update_voltage_table(short *vdd_table)
 				vdd_table[i] = acpu_vdd_tbl[i].max_vdd;
 		}
 	} else if ((cpu == 1) && (l2 == 1) && (vu == 1)) {
+		AVSDEBUG("cur_voltage=%d, min_vdd=%d, vdd_table=%d\n", cur_voltage, acpu_vdd_tbl[cur_freq_idx].min_vdd, vdd_table[cur_freq_idx]);
 		if ((cur_voltage - VOLTAGE_STEP >= VOLTAGE_MIN) &&
 		    (cur_voltage - VOLTAGE_STEP >= acpu_vdd_tbl[cur_freq_idx].min_vdd) &&
 		    (cur_voltage <= vdd_table[cur_freq_idx])) {
@@ -205,14 +246,17 @@ static void avs_update_voltage_table(short *vdd_table)
  */
 static short avs_get_target_voltage(int freq_idx, bool update_table)
 {
-	unsigned cur_tempr = GET_TEMPR();
-	unsigned temp_index = cur_tempr*avs_state.freq_cnt;
+	unsigned	cur_tempr = GET_TEMPR();
+	unsigned	temp_index = cur_tempr*avs_state.freq_cnt;
+	short		*vdd_table;
 
 	/* Table of voltages vs frequencies for this temp */
-	short *vdd_table = avs_state.avs_v + temp_index;
+	vdd_table = avs_state.avs_v + temp_index;
 
-	if (update_table)
-		avs_update_voltage_table(vdd_table);
+	AVSDEBUG("vdd_table[%d]=%d\n", freq_idx, vdd_table[freq_idx]);
+	if (update_table || (vdd_table[freq_idx] == VOLTAGE_MAX)) {
+	  avs_update_voltage_table(vdd_table);
+	}
 
 	if (vdd_table[freq_idx] > acpu_vdd_tbl[freq_idx].max_vdd) {
 		if (avs_debug)
