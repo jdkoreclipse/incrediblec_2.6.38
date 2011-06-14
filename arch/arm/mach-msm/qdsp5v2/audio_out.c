@@ -56,6 +56,7 @@ struct audio {
 };
 
 static void audio_send_data(void *cookie)
+<<<<<<< HEAD
 {
 	struct audio *audio = cookie;
 	struct audio_buffer *ab = audio->buf + audio->dsp_buf;
@@ -136,6 +137,80 @@ static int audio_open(struct inode *inode, struct file *file)
 	audplay_mix_select(audio->audplay, 1);
 	audplay_volume_pan(audio->audplay, 0x2000, 0);
 
+=======
+{
+	struct audio *audio = cookie;
+	struct audio_buffer *ab = audio->buf + audio->dsp_buf;
+
+	if (ab->used) {
+		ab->used = 0;
+		audio->dsp_buf ^= 1;
+		wake_up(&audio->wait);
+	}
+}
+
+
+static int need_init = 1;
+
+static int audio_open(struct inode *inode, struct file *file)
+{
+	int ret;
+	struct audio *audio;
+
+	if (need_init) {
+		msm_codec_output(1);
+		afe_enable(AFE_DEVICE_MI2S_CODEC_RX, 48000, 2);
+		adie_enable();
+		need_init = 0;
+	}
+
+#if 0
+	msleep(5000);
+	afe_disable(AFE_DEVICE_MI2S_CODEC_RX);
+	msm_codec_output(0);
+
+	msleep(5000);
+	msm_codec_output(1);
+	afe_enable(AFE_DEVICE_MI2S_CODEC_RX, 48000, 2);
+	return 0;
+#endif
+
+	audio = kzalloc(sizeof(*audio), GFP_KERNEL);
+	if (!audio)
+		return -ENOMEM;
+
+	audio->data = dma_alloc_coherent(NULL, 8192, &audio->phys, GFP_KERNEL);
+	if (!audio->data) {
+		pr_err("audio: could not allocate DMA buffers\n");
+		kfree(audio);
+		return -ENOMEM;
+	}
+
+	init_waitqueue_head(&audio->wait);
+
+	audio->buf[0].phys = audio->phys;
+	audio->buf[0].data = audio->data;
+	audio->buf[0].size = 4096;
+	audio->buf[0].used = 0;
+	audio->buf[1].phys = audio->phys + 4096;
+	audio->buf[1].data = audio->data + 4096;
+	audio->buf[1].size = 4096;
+	audio->buf[1].used = 0;
+
+	audio->audplay = audplay_get(audio_send_data, audio);
+	if (!audio->audplay) {
+		kfree(audio);
+		return -ENODEV;
+	}
+
+	audplay_dsp_config(audio->audplay, 1);
+
+	audplay_config_pcm(audio->audplay, 44100, 16, 2);
+
+	audplay_mix_select(audio->audplay, 1);
+	audplay_volume_pan(audio->audplay, 0x2000, 0);
+
+>>>>>>> 43bc967... Move back to the new qdsp5v2_1x driver
 	file->private_data = audio;
 	return 0;
 }
@@ -183,10 +258,13 @@ static int audio_release(struct inode *inode, struct file *file)
 	audplay_dsp_config(audio->audplay, 0);
 	audplay_put(audio->audplay);
 	kfree(audio);
+<<<<<<< HEAD
 #if 0
 	afe_disable(AFE_DEVICE_MI2S_CODEC_RX);
 	msm_codec_output(0);
 #endif
+=======
+>>>>>>> 43bc967... Move back to the new qdsp5v2_1x driver
 	return 0;
 }
 

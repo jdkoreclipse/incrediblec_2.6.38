@@ -24,6 +24,7 @@
 #include <linux/interrupt.h>
 
 #include <mach/msm_iomap.h>
+<<<<<<< HEAD
 
 #include "../dal.h"
 
@@ -129,6 +130,112 @@ void msm_adsp_put(struct msm_adsp_module *m)
 }
 
 
+=======
+
+#include "../dal.h"
+
+#include "adsp.h"
+#include "adsp_private.h"
+
+struct msm_adsp_queue {
+	const char *name;
+	uint32_t offset;
+	uint32_t max_size;
+	uint32_t flags;
+};
+	
+struct msm_adsp_module {
+	msm_adsp_callback func;
+	void *cookie;
+	
+	wait_queue_head_t wait;
+	struct msm_adsp *adsp;
+	uint32_t id;
+
+	unsigned active;
+
+	const char *name;
+	struct msm_adsp_module *next;
+	struct msm_adsp_queue queue[ADSP_QUEUES_MAX];
+};
+
+struct msm_adsp {
+	/* DSP "registers" */
+	void *read_ctrl;
+	void *write_ctrl;
+	void *send_irq;
+	void *base;
+
+	/* DAL client handle for DSP control service */
+	struct dal_client *client;
+
+	spinlock_t callback_lock;
+	spinlock_t write_lock;
+	spinlock_t event_lock;
+
+	wait_queue_head_t callback_wq;
+
+	/* list of all existing dsp modules */
+	struct msm_adsp_module *all_modules;
+
+	/* map from dsp rtos task IDs to modules */
+	struct msm_adsp_module *task_to_module[ADSP_TASKS_MAX];
+
+	/* used during initialization */
+	struct adsp_module_info tmpmodule;
+
+};
+
+static struct msm_adsp the_adsp;
+
+static struct msm_adsp_module *id_to_module(struct msm_adsp *adsp, unsigned id)
+{
+	struct msm_adsp_module *module;
+
+	for (module = adsp->all_modules; module; module = module->next)
+		if (module->id == id)
+			return module;
+	return NULL;
+}
+
+int msm_adsp_get(const char *name, struct msm_adsp_module **module,
+		 msm_adsp_callback func, void *cookie)
+{
+	struct msm_adsp *adsp = &the_adsp;
+	unsigned long flags;
+	int ret = -ENODEV;
+	struct msm_adsp_module *m;
+
+	for (m = adsp->all_modules; m; m = m->next) {
+		if (!strcmp(m->name, name)) {
+			spin_lock_irqsave(&m->adsp->callback_lock, flags);
+			if (m->func == 0) {
+				m->func = func;
+				m->cookie = cookie;
+				*module = m;
+				ret = 0;
+			} else {
+				ret = -EBUSY;
+			}
+			spin_unlock_irqrestore(&m->adsp->callback_lock, flags);
+			break;
+		}
+	}
+	return ret;
+}
+
+void msm_adsp_put(struct msm_adsp_module *m)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&m->adsp->callback_lock, flags);
+	m->func = 0;
+	m->cookie = 0;
+	spin_unlock_irqrestore(&m->adsp->callback_lock, flags);
+}
+
+
+>>>>>>> 43bc967... Move back to the new qdsp5v2_1x driver
 int msm_adsp_lookup_queue(struct msm_adsp_module *module, const char *name)
 {
 	int n;
@@ -552,6 +659,7 @@ static void adsp_add_module(struct msm_adsp *adsp, struct adsp_module_info *mi)
 {
 	struct msm_adsp_module *module;
 	int n;
+<<<<<<< HEAD
 
 	if (mi->task_id >= ADSP_TASKS_MAX) {
 		pr_err("adsp: module '%s' task id %d is invalid\n",
@@ -671,6 +779,117 @@ static int adsp_probe(struct platform_device *pdev) {
 	pr_info("audio: voice init...\n");
 	msm_voice_init();
 
+=======
+
+	if (mi->task_id >= ADSP_TASKS_MAX) {
+		pr_err("adsp: module '%s' task id %d is invalid\n",
+		       mi->name, mi->task_id);
+		return;
+	}
+	if (mi->q_cnt > ADSP_QUEUES_MAX) {
+		pr_err("adsp: module '%s' q_cnt %d is invalid\n",
+		       mi->name, mi->q_cnt);
+		return;
+	}
+
+	module = kzalloc(sizeof(*module), GFP_KERNEL);
+	if (!module)
+		return;
+
+	module->name = kstrdup(mi->name, GFP_KERNEL);
+	if (!module->name)
+		goto fail_module_name;
+
+	for (n = 0; n < mi->q_cnt; n++) {
+		struct msm_adsp_queue *queue = module->queue + n;
+		queue->name = kstrdup(mi->queue[n].name, GFP_KERNEL);
+		if (!queue->name)
+			goto fail_queue_name;
+		queue->offset = mi->queue[n].offset;
+		queue->max_size = mi->queue[n].max_size;
+		queue->flags = mi->queue[n].flag;
+	}
+
+	init_waitqueue_head(&module->wait);
+	module->id = mi->uuid;
+	module->adsp = adsp;
+
+	module->next = adsp->all_modules;
+	adsp->all_modules = module;
+
+	adsp->task_to_module[mi->task_id] = module;
+#if 0
+	pr_info("adsp: module '%s' id 0x%x task %d\n",
+		module->name, module->id, mi->task_id);
+	for (n = 0; (n < ADSP_TASKS_MAX) && module->queue[n].name; n++)
+		pr_info("       queue '%s' off 0x%x size %d flags %x",
+			module->queue[n].name, module->queue[n].offset,
+			module->queue[n].max_size, module->queue[n].flags);
+#endif
+	return;
+
+fail_queue_name:
+	for (n = 0; n < mi->q_cnt; n++)
+		if (module->queue[n].name)
+			kfree(module->queue[n].name);
+fail_module_name:
+	kfree(module);
+}
+
+static int adsp_probe(struct platform_device *pdev) {
+	struct msm_adsp *adsp = &the_adsp;
+	struct adsp_dal_cmd cmd;
+	int ret, n;
+
+	pr_info("*** adsp_probe() ***\n");
+
+	adsp->base = MSM_AD5_BASE;
+	adsp->read_ctrl = adsp->base + ADSP_READ_CTRL_OFFSET;
+	adsp->write_ctrl = adsp->base + ADSP_WRITE_CTRL_OFFSET;
+	adsp->send_irq = adsp->base + ADSP_SEND_IRQ_OFFSET;
+
+	adsp->client = dal_attach(ADSP_DAL_DEVICE, ADSP_DAL_PORT,
+				  adsp_dal_callback, adsp);
+	if (!adsp->client) {
+		pr_err("adsp_probe: cannot attach to dal device\n");
+		return -ENODEV;
+	}
+
+	cmd.cmd = ADSP_CMD_GET_INIT_INFO;
+	cmd.proc_id = ADSP_PROC_APPS;
+	cmd.module = 0;
+	cmd.cookie = 0;
+
+	for (n = 0; n < 64; n++) {
+		adsp->tmpmodule.uuid = 0xffffffff;
+		ret = dal_call_f5(adsp->client, ADSP_DAL_COMMAND,
+				  &cmd, sizeof(cmd));
+		if (ret) {
+			pr_err("adsp_probe() get info dal call failed\n");
+			break;
+		}
+		ret = wait_event_timeout(adsp->callback_wq, 
+					 (adsp->tmpmodule.uuid != 0xffffffff),
+					 5*HZ);
+		if (ret == 0) {
+			pr_err("adsp_probe() timed out getting module info\n");
+			break;
+		}
+		if (adsp->tmpmodule.uuid == 0x7fffffff)
+			break;
+		if (adsp->tmpmodule.task_id == 0xffff)
+			continue;
+//		adsp_print_module(&adsp->tmpmodule);
+		adsp_add_module(adsp, &adsp->tmpmodule);
+	}
+
+	ret = request_irq(INT_AD5A_MPROC_APPS_0, adsp_irq_handler,
+			  IRQF_TRIGGER_RISING, "adsp", 0);
+	if (ret < 0)
+		return ret;
+
+	pr_info("*** adsp_probe() done ***\n");
+>>>>>>> 43bc967... Move back to the new qdsp5v2_1x driver
 	return 0;
 }
 
@@ -695,6 +914,11 @@ static int __init adsp_init(void)
 	spin_lock_init(&adsp->write_lock);
 	spin_lock_init(&adsp->event_lock);
 
+<<<<<<< HEAD
+=======
+	msm_codec_init();
+
+>>>>>>> 43bc967... Move back to the new qdsp5v2_1x driver
 	return platform_driver_register(&adsp_driver);
 }
 
