@@ -1,3 +1,6 @@
+#ifdef CONFIG_HTC_BATTCHG_TRICKLE
+# include "htc_battery_sbc.c"
+#else
 /* arch/arm/mach-msm/htc_battery.c
  *
  * Copyright (C) 2008 HTC Corporation.
@@ -1749,3 +1752,4 @@ MODULE_DESCRIPTION("HTC Battery Driver");
 MODULE_LICENSE("GPL");
 EXPORT_SYMBOL(htc_is_cable_in);
 EXPORT_SYMBOL(htc_is_zcharge_enabled);
+#endif
