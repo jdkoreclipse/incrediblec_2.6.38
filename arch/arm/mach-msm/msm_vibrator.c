@@ -132,3 +132,4 @@ void __init msm_init_pmic_vibrator(void)
 MODULE_DESCRIPTION("timed output pmic vibrator device");
 MODULE_LICENSE("GPL");
 
+

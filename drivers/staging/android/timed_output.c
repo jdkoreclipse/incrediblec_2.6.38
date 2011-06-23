@@ -121,3 +121,4 @@ module_exit(timed_output_exit);
 MODULE_AUTHOR("Mike Lockwood <lockwood@android.com>");
 MODULE_DESCRIPTION("timed output class driver");
 MODULE_LICENSE("GPL");
+
