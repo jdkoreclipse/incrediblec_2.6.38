@@ -34,6 +34,8 @@
 #include <asm/cputime.h>
 #include <linux/earlysuspend.h>
 
+#define create_rt_workqueue
+
 static void (*pm_idle_old)(void);
 static atomic_t active_count = ATOMIC_INIT(0);
 
